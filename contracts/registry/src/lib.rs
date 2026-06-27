@@ -21,6 +21,16 @@ pub enum DataKey {
     CertifiedSkills(Address),     // persistent: Vec<Symbol>
     Specialisation(Address),      // persistent: Vec<Symbol>
     SkillExpiry(Address, Symbol), // persistent: u64 timestamp (0 = never)
+    UserList,                     // instance: Vec<Address> — ordered registration list
+}
+
+fn level_ord(level: &VerificationLevel) -> u32 {
+    match level {
+        VerificationLevel::Unverified => 0,
+        VerificationLevel::Basic => 1,
+        VerificationLevel::Advanced => 2,
+        VerificationLevel::Expert => 3,
+    }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -226,6 +236,90 @@ impl RegistryContract {
             .persistent()
             .get(&DataKey::Specialisation(user))
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // ── Pagination + filtering (#701) ─────────────────────────────────────────
+
+    /// Register a user in the global listing (idempotent).
+    pub fn register_user(env: Env, user: Address) {
+        user.require_auth();
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserList)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !list.iter().any(|a| a == user) {
+            list.push_back(user.clone());
+            env.storage().instance().set(&DataKey::UserList, &list);
+        }
+    }
+
+    /// Return a page of registered users.
+    /// `offset` is zero-based; `limit` is the max entries to return.
+    pub fn list_users(env: Env, offset: u32, limit: u32) -> Vec<Address> {
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserList)
+            .unwrap_or_else(|| Vec::new(&env));
+        let total = list.len();
+        let start = offset.min(total);
+        let end = (offset + limit).min(total);
+        let mut page = Vec::new(&env);
+        let mut i = start;
+        while i < end {
+            page.push_back(list.get(i).unwrap());
+            i += 1;
+        }
+        page
+    }
+
+    /// Return users filtered by minimum verification level.
+    /// `offset`/`limit` apply after filtering.
+    pub fn list_users_by_level(
+        env: Env,
+        min_level: VerificationLevel,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<Address> {
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserList)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let min_ord = level_ord(&min_level);
+        let mut filtered = Vec::new(&env);
+        for addr in list.iter() {
+            let level = env
+                .storage()
+                .persistent()
+                .get(&DataKey::VerificationLevel(addr.clone()))
+                .unwrap_or(VerificationLevel::Unverified);
+            if level_ord(&level) >= min_ord {
+                filtered.push_back(addr);
+            }
+        }
+
+        let total = filtered.len();
+        let start = offset.min(total);
+        let end = (offset + limit).min(total);
+        let mut page = Vec::new(&env);
+        let mut i = start;
+        while i < end {
+            page.push_back(filtered.get(i).unwrap());
+            i += 1;
+        }
+        page
+    }
+
+    pub fn total_users(env: Env) -> u32 {
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserList)
+            .unwrap_or_else(|| Vec::new(&env));
+        list.len()
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
