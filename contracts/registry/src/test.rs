@@ -185,4 +185,94 @@ mod test {
         let user = Address::generate(&env);
         client.set_specialisations(&rando, &user, &Vec::new(&env));
     }
+
+    // ── Pagination / filtering (#701) ─────────────────────────────────────────
+
+    #[test]
+    fn test_register_and_list_users() {
+        let (env, client, _) = setup();
+        let u1 = Address::generate(&env);
+        let u2 = Address::generate(&env);
+        let u3 = Address::generate(&env);
+        client.register_user(&u1);
+        client.register_user(&u2);
+        client.register_user(&u3);
+        assert_eq!(client.total_users(), 3);
+        let page = client.list_users(&0, &2);
+        assert_eq!(page.len(), 2);
+        let page2 = client.list_users(&2, &10);
+        assert_eq!(page2.len(), 1);
+    }
+
+    #[test]
+    fn test_list_users_empty() {
+        let (_, client, _) = setup();
+        assert_eq!(client.list_users(&0, &10).len(), 0);
+        assert_eq!(client.total_users(), 0);
+    }
+
+    #[test]
+    fn test_list_users_offset_beyond_end() {
+        let (env, client, _) = setup();
+        let u1 = Address::generate(&env);
+        client.register_user(&u1);
+        // offset past end returns empty
+        let page = client.list_users(&100, &10);
+        assert_eq!(page.len(), 0);
+    }
+
+    #[test]
+    fn test_list_users_last_page() {
+        let (env, client, _) = setup();
+        for _ in 0..5 {
+            client.register_user(&Address::generate(&env));
+        }
+        // Page that starts at 3, asking for 10 → only 2 results
+        let page = client.list_users(&3, &10);
+        assert_eq!(page.len(), 2);
+    }
+
+    #[test]
+    fn test_register_idempotent() {
+        let (env, client, _) = setup();
+        let u = Address::generate(&env);
+        client.register_user(&u);
+        client.register_user(&u);
+        assert_eq!(client.total_users(), 1);
+    }
+
+    #[test]
+    fn test_list_users_by_level_filter() {
+        let (env, client, admin) = setup();
+        let u1 = Address::generate(&env);
+        let u2 = Address::generate(&env);
+        let u3 = Address::generate(&env);
+        client.register_user(&u1);
+        client.register_user(&u2);
+        client.register_user(&u3);
+        client.set_verification_level(&admin, &u1, &VerificationLevel::Basic);
+        client.set_verification_level(&admin, &u2, &VerificationLevel::Expert);
+        // u3 stays Unverified
+        let advanced_plus = client.list_users_by_level(&VerificationLevel::Advanced, &0, &10);
+        assert_eq!(advanced_plus.len(), 1);
+        assert_eq!(advanced_plus.get(0).unwrap(), u2);
+        let basic_plus = client.list_users_by_level(&VerificationLevel::Basic, &0, &10);
+        assert_eq!(basic_plus.len(), 2);
+    }
+
+    #[test]
+    fn test_list_users_by_level_pagination() {
+        let (env, client, admin) = setup();
+        for _ in 0..4 {
+            let u = Address::generate(&env);
+            client.register_user(&u);
+            client.set_verification_level(&admin, &u, &VerificationLevel::Basic);
+        }
+        let page1 = client.list_users_by_level(&VerificationLevel::Basic, &0, &2);
+        assert_eq!(page1.len(), 2);
+        let page2 = client.list_users_by_level(&VerificationLevel::Basic, &2, &2);
+        assert_eq!(page2.len(), 2);
+        let page3 = client.list_users_by_level(&VerificationLevel::Basic, &4, &2);
+        assert_eq!(page3.len(), 0);
+    }
 }
